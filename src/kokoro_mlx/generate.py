@@ -16,19 +16,40 @@ from .voices import VoiceManager
 SAMPLE_RATE = 24000
 
 
-def _resample_2x(audio: np.ndarray) -> np.ndarray:
-    """Upsample audio by exactly 2x using FFT zero-padding.
+def _validate_sample_rate(sample_rate: int) -> None:
+    """Reject a rate we cannot honestly resample to."""
+    if not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate <= 0:
+        raise ValueError(f"sample_rate must be a positive integer, got {sample_rate!r}")
 
-    For a real signal of length N, the rfft has N//2+1 bins.  Padding the
-    spectrum to 2x length and taking the irfft produces a perfectly
-    bandlimited 2x-upsampled signal.  Numpy-only, no extra dependencies.
+
+def _resample(audio: np.ndarray, orig_rate: int, target_rate: int) -> np.ndarray:
+    """Resample audio between two rates using the Fourier method.
+
+    For a real signal of length N, the rfft has N//2+1 bins.  Zero-padding that
+    spectrum interpolates; truncating it decimates, and the truncation is
+    itself an ideal low-pass at the new Nyquist, so downsampling needs no
+    separate anti-aliasing filter.  Numpy-only, no extra dependencies.
     """
     n = len(audio)
+    if n == 0 or orig_rate == target_rate:
+        return audio.astype(np.float32, copy=False)
+
+    out_len = int(round(n * target_rate / orig_rate))
+    if out_len < 1:
+        return np.array([], dtype=np.float32)
+
     spectrum = np.fft.rfft(audio)
-    out_len = n * 2
-    padded = np.zeros(out_len // 2 + 1, dtype=spectrum.dtype)
-    padded[: len(spectrum)] = spectrum
-    return np.fft.irfft(padded, n=out_len).astype(np.float32) * 2.0
+    resized = np.zeros(out_len // 2 + 1, dtype=spectrum.dtype)
+    keep = min(len(spectrum), len(resized))
+    resized[:keep] = spectrum[:keep]
+
+    # A real signal's Nyquist bin must be real. When decimating, the bin we
+    # truncated at is an interior bin of the original spectrum and generally
+    # is not.
+    if out_len % 2 == 0 and len(spectrum) > len(resized):
+        resized[-1] = resized[-1].real
+
+    return np.fft.irfft(resized, n=out_len).astype(np.float32) * (out_len / n)
 
 
 def generate(
@@ -52,7 +73,9 @@ def generate(
         voice: Voice name to use for synthesis.
         speed: Speaking rate multiplier (>1 is faster, <1 is slower).
         phonemizer: Optional pre-built Phonemizer to avoid re-initializing.
-        sample_rate: Output sample rate. 24000 (native) or 48000 (2x upsampled).
+        sample_rate: Output sample rate. The model renders at 24000; any other
+            rate is resampled, so the returned audio is always genuinely at
+            *sample_rate* and ``len(audio) / sample_rate`` is its true duration.
         return_timestamps: When True, return ``(audio, timestamps)`` where
             timestamps holds one ``{"word", "start_time", "end_time"}`` mapping
             per whitespace-separated word of *text*, or ``None`` if the words
@@ -62,6 +85,8 @@ def generate(
         Float32 numpy array of audio samples at the requested sample rate, or
         ``(audio, timestamps)`` when *return_timestamps*.
     """
+    _validate_sample_rate(sample_rate)
+
     if phonemizer is None:
         phonemizer = Phonemizer(config.vocab)
 
@@ -103,9 +128,7 @@ def generate(
         elapsed += len(samples) / SAMPLE_RATE
 
     result = np.concatenate(audio_chunks) if audio_chunks else np.array([], dtype=np.float32)
-
-    if sample_rate == 48000 and len(result) > 0:
-        result = _resample_2x(result)
+    result = _resample(result, SAMPLE_RATE, sample_rate)
 
     if not return_timestamps:
         return result
@@ -138,11 +161,14 @@ def generate_stream(
         voice: Voice name to use for synthesis.
         speed: Speaking rate multiplier.
         phonemizer: Optional pre-built Phonemizer to avoid re-initializing.
-        sample_rate: Output sample rate. 24000 (native) or 48000 (2x upsampled).
+        sample_rate: Output sample rate. The model renders at 24000; any other
+            rate is resampled chunk by chunk.
 
     Yields:
         Float32 numpy arrays, one per sentence chunk.
     """
+    _validate_sample_rate(sample_rate)
+
     if phonemizer is None:
         phonemizer = Phonemizer(config.vocab)
 
@@ -151,12 +177,9 @@ def generate_stream(
         return
 
     voice_array = voice_manager.load_voice(voice)
-    upsample = sample_rate == 48000
 
     for phonemes, token_ids in chunks:
         style = voice_manager.get_style(voice_array, len(token_ids))
         audio = model.forward(phonemes, style, speed)
         chunk = np.array(audio.tolist(), dtype=np.float32)
-        if upsample and len(chunk) > 0:
-            chunk = _resample_2x(chunk)
-        yield chunk
+        yield _resample(chunk, SAMPLE_RATE, sample_rate)

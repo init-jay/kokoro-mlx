@@ -37,7 +37,7 @@ Model weights download automatically from HuggingFace Hub on first use.
 
 - **On-device** via MLX. No server, no network during inference.
 - **No PyTorch or transformers** dependency.
-- **48 kHz output** from native 24 kHz via FFT upsampling.
+- **Any output sample rate** resampled from native 24 kHz via FFT, anti-aliased when downsampling.
 - **Mixed-precision vocoder**: bf16 through the network, float32 for waveform reconstruction.
 - **Gapless streaming** over a single persistent audio stream.
 - **54 voices** across American English, British English, and additional languages.
@@ -73,7 +73,7 @@ Synthesize text and return a `TTSResult`.
 | `text` | `str` | required | Input text to synthesize |
 | `voice` | `str` | `"af_heart"` | Voice name (see [Available Voices](#available-voices)) |
 | `speed` | `float` | `1.0` | Speaking rate multiplier (>1 faster, <1 slower) |
-| `sample_rate` | `int` | `24000` | Output sample rate: 24000 (native) or 48000 (2x upsampled) |
+| `sample_rate` | `int` | `24000` | Output sample rate. The model renders at 24000; any other rate is resampled |
 | `language` | `str` or `None` | `None` | Optional G2P language code/name. `None` infers from the voice prefix. |
 | `return_timestamps` | `bool` | `False` | Populate `TTSResult.timestamps` with per-word times |
 
@@ -122,7 +122,7 @@ Synthesize and immediately play text through the speakers.
 | `speed` | `float` | `1.0` | Speaking rate multiplier |
 | `stream` | `bool` | `False` | Play chunk-by-chunk for lower latency |
 | `stop_event` | `threading.Event` or `None` | `None` | Set to interrupt playback |
-| `sample_rate` | `int` | `24000` | Output sample rate: 24000 or 48000 |
+| `sample_rate` | `int` | `24000` | Output sample rate. The model renders at 24000; any other rate is resampled |
 | `language` | `str` or `None` | `None` | Optional G2P language code/name. `None` infers from the voice prefix. |
 
 ### `tts.save(text, path, voice, speed, sample_rate, language) -> TTSResult`
@@ -186,7 +186,7 @@ with KokoroTTS.from_pretrained() as tts:
 @dataclass
 class TTSResult:
     audio: np.ndarray   # float32
-    sample_rate: int    # 24000 or 48000
+    sample_rate: int    # the rate the audio is genuinely at
     duration: float     # seconds
     voice: str          # voice name used
     timestamps: list[dict] | None = None   # per-word times, when requested

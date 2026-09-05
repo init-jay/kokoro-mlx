@@ -156,6 +156,37 @@ Guard the whole thing in `try/except` and return `None` on any failure.
 
 ---
 
+## Output sample rate
+
+Added after the first implementation landed, having been caught in review.
+
+`sample_rate=16000` did not resample. `generate()` branched only on
+`sample_rate == 48000`; every other value fell through and returned the
+identical 24 kHz samples merely relabelled, so playback ran 1.5x slow and a
+fifth low. `TTSResult.duration` was then computed as `len(audio) / sample_rate`
+against a rate the audio was not at, which is why it disagreed with the
+timestamps. `save()` passed the same false rate to `save_wav()`, so a 16 kHz
+corpus WAV would have carried a 16 kHz header on 24 kHz samples — the exact
+silent-wrongness this pipeline guards against elsewhere.
+
+Two requirements:
+
+* **`sample_rate` must actually resample**, or be rejected. The model renders
+  at 24000; any other requested rate is resampled, never relabelled. Rates that
+  cannot be honoured raise `ValueError` rather than returning mislabelled audio.
+* **`duration` must derive from the true rate.** With resampling guaranteed,
+  `len(audio) / sample_rate` is correct by construction; the invariant to test
+  is that duration is the same wall-clock number at every rate.
+
+The corpus consumer needs 16 kHz (`train.py` writes
+`scipy.io.wavfile.write(..., 16000, data)`), so rejecting non-24 kHz rates was
+not an option. Resampling is Fourier-method and numpy-only, matching the
+existing 2x path; truncating the spectrum is itself an ideal low-pass at the new
+Nyquist, so downsampling needs no separate anti-aliasing filter. Measured cost
+is ~1.3 ms per clip, against ~90 ms of synthesis.
+
+---
+
 ## Acceptance tests
 
 **1. Word count and monotonicity.** For `"hey seeree what is on tonight"`, six
@@ -195,6 +226,14 @@ in-process call does not have.
 **Energy-based splitting.** Considered and rejected. Durations give exact boundaries
 for free; energy detection cannot find the run-on cut point at all, because there is
 no pause between the wake word and the command.
+
+**Trimming the model's pad silence.** Kokoro renders a BOS pad before the first
+word and an EOS pad after the last — 0.625 s of the 2.425 s test clip.
+Kokoro-FastAPI trims its leading pad and anchors word 1 near 0; this fork keeps
+the pads and reports times against the clip it actually returns, which is what
+a caller slicing that array needs. Measured, the two engines' *speech* spans
+agree to 1.4% (1.800 s vs 1.775 s), so this is padding, not tempo. Trimming is
+the consumer's call, not the library's.
 
 **Matching Kokoro-FastAPI's audio.** Out of scope for the fork, but note for whoever
 integrates: `mlx-community/Kokoro-82M-bf16` and `misaki` G2P will not produce

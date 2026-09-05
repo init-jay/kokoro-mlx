@@ -67,6 +67,39 @@ class TestKokoroTTS:
             assert isinstance(entry["start_time"], float)
             assert entry["start_time"] <= entry["end_time"] <= result.duration
 
+    def test_sample_rate_actually_resamples(self, tts):
+        """A requested rate must change the samples, not just the label."""
+        text = "hey seeree what is on tonight"
+        native = tts.generate(text, voice="af_bella")
+        for rate, ratio in ((16000, 16000 / 24000), (48000, 2.0)):
+            other = tts.generate(text, voice="af_bella", sample_rate=rate)
+            assert other.sample_rate == rate
+            assert abs(len(other.audio) - len(native.audio) * ratio) <= 1
+
+    def test_duration_is_the_same_wall_clock_at_every_rate(self, tts):
+        text = "hey seeree what is on tonight"
+        native = tts.generate(text, voice="af_bella")
+        for rate in (16000, 48000):
+            other = tts.generate(text, voice="af_bella", sample_rate=rate)
+            assert abs(other.duration - native.duration) < 1e-3
+            assert abs(other.duration - len(other.audio) / rate) < 1e-9
+
+    def test_saved_wav_has_the_rate_it_claims(self, tts):
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "corpus.wav"
+            result = tts.save("hey seeree", path, voice="af_bella", sample_rate=16000)
+            data, sr = sf.read(str(path))
+            assert sr == 16000
+            # The file must play back at the right speed, i.e. its length in
+            # seconds must match the generated duration.
+            assert abs(len(data) / sr - result.duration) < 1e-3
+
+    def test_bad_sample_rate_raises(self, tts):
+        with pytest.raises(ValueError):
+            tts.generate("This should fail.", sample_rate=0)
+
     def test_list_voices_nonempty(self, tts):
         voices = tts.list_voices()
         assert isinstance(voices, list)

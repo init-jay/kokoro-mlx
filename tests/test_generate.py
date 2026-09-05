@@ -93,6 +93,96 @@ class TestGenerate:
 
 
 # ---------------------------------------------------------------------------
+# _resample()
+# ---------------------------------------------------------------------------
+
+
+class TestResample:
+    """No model weights needed: this is arithmetic on arrays."""
+
+    @staticmethod
+    def _tone(freq: float, secs: float, rate: int) -> np.ndarray:
+        t = np.arange(int(secs * rate)) / rate
+        return np.sin(2 * np.pi * freq * t).astype(np.float32)
+
+    def test_length_follows_the_rate_ratio(self):
+        from kokoro_mlx.generate import _resample
+
+        audio = self._tone(440, 1.0, 24000)
+        assert len(_resample(audio, 24000, 16000)) == 16000
+        assert len(_resample(audio, 24000, 48000)) == 48000
+        assert len(_resample(audio, 24000, 22050)) == 22050
+
+    def test_same_rate_is_a_passthrough(self):
+        from kokoro_mlx.generate import _resample
+
+        audio = self._tone(440, 0.1, 24000)
+        np.testing.assert_array_equal(_resample(audio, 24000, 24000), audio)
+
+    def test_downsampling_preserves_the_tone(self):
+        from kokoro_mlx.generate import _resample
+
+        out = _resample(self._tone(440, 0.5, 24000), 24000, 16000)
+        # The 440 Hz peak must survive at the same frequency and amplitude.
+        spectrum = np.abs(np.fft.rfft(out))
+        peak_hz = np.argmax(spectrum) * 16000 / len(out)
+        assert abs(peak_hz - 440) < 5
+        assert 0.9 < np.abs(out[1000:-1000]).max() < 1.1
+
+    def test_downsampling_does_not_alias(self):
+        from kokoro_mlx.generate import _resample
+
+        # 10 kHz is above the 8 kHz Nyquist of a 16 kHz signal. Truncating the
+        # spectrum must remove it, not fold it down to 6 kHz.
+        out = _resample(self._tone(10000, 0.5, 24000), 24000, 16000)
+        assert np.abs(out[500:-500]).max() < 0.05
+
+    def test_upsampling_matches_the_previous_2x_path(self):
+        from kokoro_mlx.generate import _resample
+
+        audio = self._tone(440, 0.25, 24000)
+        n = len(audio)
+        spectrum = np.fft.rfft(audio)
+        padded = np.zeros(n + 1, dtype=spectrum.dtype)
+        padded[: len(spectrum)] = spectrum
+        expected = np.fft.irfft(padded, n=n * 2).astype(np.float32) * 2.0
+        np.testing.assert_allclose(_resample(audio, 24000, 48000), expected, atol=1e-6)
+
+    def test_empty_input(self):
+        from kokoro_mlx.generate import _resample
+
+        out = _resample(np.array([], dtype=np.float32), 24000, 16000)
+        assert out.shape[0] == 0
+
+    def test_output_is_float32(self):
+        from kokoro_mlx.generate import _resample
+
+        assert _resample(self._tone(440, 0.1, 24000), 24000, 16000).dtype == np.float32
+
+
+class TestSampleRateValidation:
+    def test_rejects_non_positive(self):
+        from kokoro_mlx.generate import _validate_sample_rate
+
+        for bad in (0, -24000):
+            with pytest.raises(ValueError):
+                _validate_sample_rate(bad)
+
+    def test_rejects_non_integer(self):
+        from kokoro_mlx.generate import _validate_sample_rate
+
+        for bad in (24000.0, "24000", None):
+            with pytest.raises(ValueError):
+                _validate_sample_rate(bad)
+
+    def test_accepts_ordinary_rates(self):
+        from kokoro_mlx.generate import _validate_sample_rate
+
+        for good in (8000, 16000, 22050, 24000, 44100, 48000):
+            _validate_sample_rate(good)
+
+
+# ---------------------------------------------------------------------------
 # generate(return_timestamps=True)
 # ---------------------------------------------------------------------------
 
@@ -173,12 +263,23 @@ class TestGenerateTimestamps:
         audio, timestamps = generate(self.TEXT, model, config, voice_manager, speed=1.5, return_timestamps=True)
         assert timestamps[-1]["end_time"] <= len(audio) / SAMPLE_RATE
 
-    def test_48k_times_stay_in_seconds(self, model, config, voice_manager):
+    def test_times_stay_in_seconds_at_every_rate(self, model, config, voice_manager):
         from kokoro_mlx.generate import generate
 
         native = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)[1]
-        upsampled = generate(self.TEXT, model, config, voice_manager, sample_rate=48000, return_timestamps=True)[1]
-        assert native == upsampled
+        for rate in (16000, 48000):
+            other = generate(self.TEXT, model, config, voice_manager, sample_rate=rate, return_timestamps=True)[1]
+            assert native == other
+
+    def test_timestamps_fit_the_clip_at_every_rate(self, model, config, voice_manager):
+        """The bug this guards: 16 kHz used to return 24 kHz samples relabelled."""
+        from kokoro_mlx.generate import generate
+
+        for rate in (16000, 24000, 48000):
+            audio, timestamps = generate(
+                self.TEXT, model, config, voice_manager, sample_rate=rate, return_timestamps=True
+            )
+            assert timestamps[-1]["end_time"] <= len(audio) / rate
 
     def test_empty_text_returns_no_timestamps(self, model, config, voice_manager):
         from kokoro_mlx.generate import generate

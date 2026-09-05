@@ -116,7 +116,8 @@ class KokoroTTS:
             text: Input text to synthesize.
             voice: Voice name (see :meth:`list_voices`).
             speed: Speaking rate multiplier (>1 is faster, <1 is slower).
-            sample_rate: Output sample rate (24000 or 48000).
+            sample_rate: Output sample rate. The model renders at 24000; any
+                other rate is resampled, never merely relabelled.
             language: Optional language code/name for G2P. When omitted,
                 it is inferred from the voice prefix.
             return_timestamps: When True, populate ``TTSResult.timestamps``
@@ -142,6 +143,8 @@ class KokoroTTS:
         else:
             audio = output
 
+        # generate() resamples rather than relabelling, so the audio really is
+        # at sample_rate and this is its true wall-clock length.
         duration = len(audio) / sample_rate
         return TTSResult(
             audio=audio,
@@ -168,7 +171,8 @@ class KokoroTTS:
             text: Input text to synthesize.
             voice: Voice name (see :meth:`list_voices`).
             speed: Speaking rate multiplier.
-            sample_rate: Output sample rate (24000 or 48000).
+            sample_rate: Output sample rate. The model renders at 24000; any
+                other rate is resampled, never merely relabelled.
             language: Optional language code/name for G2P. When omitted,
                 it is inferred from the voice prefix.
         """
@@ -202,7 +206,8 @@ class KokoroTTS:
             speed: Speaking rate multiplier.
             stream: When True, generate and play chunk-by-chunk for lower latency.
             stop_event: Optional ``threading.Event``; playback halts when set.
-            sample_rate: Output sample rate (24000 or 48000).
+            sample_rate: Output sample rate. The model renders at 24000; any
+                other rate is resampled, never merely relabelled.
             language: Optional language code/name for G2P. When omitted,
                 it is inferred from the voice prefix.
         """
@@ -232,7 +237,8 @@ class KokoroTTS:
             path: Destination file path.
             voice: Voice name.
             speed: Speaking rate multiplier.
-            sample_rate: Output sample rate (24000 or 48000).
+            sample_rate: Output sample rate. The model renders at 24000; any
+                other rate is resampled, never merely relabelled.
             language: Optional language code/name for G2P. When omitted,
                 it is inferred from the voice prefix.
         """

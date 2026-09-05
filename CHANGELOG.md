@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-09-05
+
+### Fixed
+
+- `sample_rate` now actually resamples instead of relabelling. Only 48000 was handled; every other value returned native 24 kHz samples tagged with the requested rate, so 16 kHz output played 1.5x slow and a fifth low, and `save()` wrote a WAV whose header did not match its samples. Resampling is Fourier-method and numpy-only; downsampling is anti-aliased by construction.
+- `TTSResult.duration` is consequently the true wall-clock length at every rate, and no longer disagrees with `timestamps`.
+- Reject a `sample_rate` that is not a positive integer, rather than returning mislabelled audio.
+
 ## [0.2.0] - 2026-09-05
 
 ### Added
