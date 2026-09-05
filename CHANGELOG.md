@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-09-05
+
+### Added
+
+- Word timestamps, derived from the model's own predicted phoneme durations rather than estimated: `tts.generate(..., return_timestamps=True)` populates `TTSResult.timestamps` with one `{"word", "start_time", "end_time"}` mapping per whitespace-separated word of the input.
+- `kokoro_mlx.timestamps` with the duration arithmetic, exported as `word_timestamps`. Returns `None` rather than a guess when the phoneme groups cannot be mapped onto the input words.
+- `KokoroModel.forward(..., return_pred_dur=True)` also returns the predicted per-token durations the audio was rendered from.
+- `Phonemizer.phonemize_chunks`, which keeps each chunk's source text alongside its phonemes.
+
+### Fixed
+
+- Point the model-backed tests in `tests/test_model.py` at the current user's HuggingFace cache instead of a hardcoded home directory.
+
 ## [0.1.2] - 2026-05-12
 
 ### Changed

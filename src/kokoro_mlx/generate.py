@@ -10,6 +10,7 @@ import numpy as np
 from .config import KokoroConfig
 from .model import KokoroModel
 from .phonemize import Phonemizer
+from .timestamps import WordTimestamp, word_timestamps
 from .voices import VoiceManager
 
 SAMPLE_RATE = 24000
@@ -39,7 +40,8 @@ def generate(
     speed: float = 1.0,
     phonemizer: Phonemizer | None = None,
     sample_rate: int = SAMPLE_RATE,
-) -> np.ndarray:
+    return_timestamps: bool = False,
+) -> np.ndarray | tuple[np.ndarray, list[WordTimestamp] | None]:
     """Full text-to-audio pipeline.
 
     Args:
@@ -51,31 +53,66 @@ def generate(
         speed: Speaking rate multiplier (>1 is faster, <1 is slower).
         phonemizer: Optional pre-built Phonemizer to avoid re-initializing.
         sample_rate: Output sample rate. 24000 (native) or 48000 (2x upsampled).
+        return_timestamps: When True, return ``(audio, timestamps)`` where
+            timestamps holds one ``{"word", "start_time", "end_time"}`` mapping
+            per whitespace-separated word of *text*, or ``None`` if the words
+            could not be mapped onto the phonemes.
 
     Returns:
-        Float32 numpy array of audio samples at the requested sample rate.
+        Float32 numpy array of audio samples at the requested sample rate, or
+        ``(audio, timestamps)`` when *return_timestamps*.
     """
     if phonemizer is None:
         phonemizer = Phonemizer(config.vocab)
 
-    chunks = phonemizer.phonemize_long(text)
+    chunks = phonemizer.phonemize_chunks(text)
     if not chunks:
-        return np.array([], dtype=np.float32)
+        empty = np.array([], dtype=np.float32)
+        return (empty, []) if return_timestamps else empty
 
     voice_array = voice_manager.load_voice(voice)
 
     audio_chunks = []
-    for phonemes, token_ids in chunks:
+    timestamps: list[WordTimestamp] | None = [] if return_timestamps else None
+    elapsed = 0.0
+
+    for chunk_text, phonemes, token_ids in chunks:
         style = voice_manager.get_style(voice_array, len(token_ids))
-        audio = model.forward(phonemes, style, speed)
-        audio_chunks.append(np.array(audio.tolist(), dtype=np.float32))
+        if return_timestamps:
+            audio, pred_dur = model.forward(phonemes, style, speed, return_pred_dur=True)
+        else:
+            audio = model.forward(phonemes, style, speed)
+        samples = np.array(audio.tolist(), dtype=np.float32)
+        audio_chunks.append(samples)
+
+        if timestamps is not None:
+            chunk_timestamps = word_timestamps(
+                text=chunk_text,
+                phonemes=phonemes,
+                pred_dur=pred_dur,
+                vocab=model.vocab,
+                phonemize_word=lambda word: phonemizer.phonemize(word)[0],
+                offset=elapsed,
+            )
+            # One bad chunk poisons the whole clip: later times are still
+            # right, but the word list no longer lines up with the input.
+            timestamps = None if chunk_timestamps is None else timestamps + chunk_timestamps
+
+        # Chunks are concatenated at the native rate, so this is the offset of
+        # the next chunk in seconds regardless of any later upsampling.
+        elapsed += len(samples) / SAMPLE_RATE
 
     result = np.concatenate(audio_chunks) if audio_chunks else np.array([], dtype=np.float32)
 
     if sample_rate == 48000 and len(result) > 0:
         result = _resample_2x(result)
 
-    return result
+    if not return_timestamps:
+        return result
+
+    if timestamps is not None and len(timestamps) != len(text.split()):
+        timestamps = None
+    return result, timestamps
 
 
 def generate_stream(

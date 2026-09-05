@@ -17,6 +17,7 @@ from .generate import SAMPLE_RATE, generate, generate_stream
 from .model import KokoroModel
 from .phonemize import Phonemizer, language_from_voice, normalize_language
 from .playback import play, play_stream, save_wav
+from .timestamps import WordTimestamp
 from .voices import DEFAULT_VOICE, VoiceManager
 
 
@@ -28,6 +29,13 @@ class TTSResult:
     sample_rate: int
     duration: float
     voice: str
+    timestamps: list[WordTimestamp] | None = None
+    """Per-word times, when requested via ``return_timestamps``.
+
+    One ``{"word", "start_time", "end_time"}`` mapping per whitespace-separated
+    word of the input, in order.  ``None`` means either that timestamps were
+    not requested or that they could not be trusted -- never a guess.
+    """
 
 
 class KokoroTTS:
@@ -98,6 +106,7 @@ class KokoroTTS:
         speed: float = 1.0,
         sample_rate: int = SAMPLE_RATE,
         language: str | None = None,
+        return_timestamps: bool = False,
     ) -> TTSResult:
         """Synthesize *text* and return a TTSResult.
 
@@ -110,10 +119,14 @@ class KokoroTTS:
             sample_rate: Output sample rate (24000 or 48000).
             language: Optional language code/name for G2P. When omitted,
                 it is inferred from the voice prefix.
+            return_timestamps: When True, populate ``TTSResult.timestamps``
+                with per-word times taken from the model's own predicted
+                phoneme durations.
         """
+        timestamps: list[WordTimestamp] | None = None
         with self._lock:
             phonemizer = self._get_phonemizer(language, voice)
-            audio = generate(
+            output = generate(
                 text=text,
                 model=self._model,
                 config=self._config,
@@ -122,10 +135,21 @@ class KokoroTTS:
                 speed=speed,
                 phonemizer=phonemizer,
                 sample_rate=sample_rate,
+                return_timestamps=return_timestamps,
             )
+        if return_timestamps:
+            audio, timestamps = output
+        else:
+            audio = output
 
         duration = len(audio) / sample_rate
-        return TTSResult(audio=audio, sample_rate=sample_rate, duration=duration, voice=voice)
+        return TTSResult(
+            audio=audio,
+            sample_rate=sample_rate,
+            duration=duration,
+            voice=voice,
+            timestamps=timestamps,
+        )
 
     def generate_stream(
         self,

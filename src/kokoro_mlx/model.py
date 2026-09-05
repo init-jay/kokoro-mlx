@@ -436,16 +436,25 @@ class KokoroModel(nn.Module):
         mx.eval(model.parameters())
         return model
 
-    def forward(self, phonemes: str, ref_s: mx.array, speed: float = 1.0) -> mx.array:
+    def forward(
+        self,
+        phonemes: str,
+        ref_s: mx.array,
+        speed: float = 1.0,
+        return_pred_dur: bool = False,
+    ) -> mx.array | tuple[mx.array, np.ndarray]:
         """Generate audio from phoneme string and reference style vector.
 
         Args:
             phonemes: Phoneme string (each character mapped via self.vocab).
             ref_s: Reference style vector, shape (1, 256) or (256,).
             speed: Speaking rate multiplier (lower = slower).
+            return_pred_dur: When True, also return the predicted per-token
+                durations the audio was rendered from. These are what word
+                timestamps are derived from; see :mod:`kokoro_mlx.timestamps`.
 
         Returns:
-            1D audio array.
+            1D audio array, or ``(audio, pred_dur)`` when *return_pred_dur*.
         """
         if ref_s.ndim == 1:
             ref_s = ref_s[None, :]  # (1, 256)
@@ -507,4 +516,7 @@ class KokoroModel(nn.Module):
 
         # --- Decode ---
         audio = self.decoder(asr, F0_pred, N_pred, s_decoder)  # (1, 1, samples)
-        return audio.squeeze()  # 1D
+        audio = audio.squeeze()  # 1D
+        if return_pred_dur:
+            return audio, pred_dur_np
+        return audio

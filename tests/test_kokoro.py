@@ -54,6 +54,19 @@ class TestKokoroTTS:
         expected = len(result.audio) / result.sample_rate
         assert abs(result.duration - expected) < 1e-6
 
+    def test_timestamps_absent_unless_requested(self, tts):
+        result = tts.generate("Hello, world.")
+        assert result.timestamps is None
+
+    def test_generate_returns_word_timestamps(self, tts):
+        text = "hey seeree what is on tonight"
+        result = tts.generate(text, voice="af_bella", return_timestamps=True)
+        assert result.timestamps is not None
+        assert [entry["word"] for entry in result.timestamps] == text.split()
+        for entry in result.timestamps:
+            assert isinstance(entry["start_time"], float)
+            assert entry["start_time"] <= entry["end_time"] <= result.duration
+
     def test_list_voices_nonempty(self, tts):
         voices = tts.list_voices()
         assert isinstance(voices, list)

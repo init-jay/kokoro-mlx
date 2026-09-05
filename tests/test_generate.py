@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from kokoro_mlx.generate import SAMPLE_RATE
+
 _MODEL_PATH = Path.home() / ".cache/huggingface/hub/models--mlx-community--Kokoro-82M-bf16/snapshots/a71e4d38b236d968966a2002c4c895dbd12b1c3c"
 
 
@@ -88,6 +90,117 @@ class TestGenerate:
         fast = generate(text, model, config, voice_manager, speed=2.0)
         # Slower speech produces more frames.
         assert slow.shape[0] > fast.shape[0]
+
+
+# ---------------------------------------------------------------------------
+# generate(return_timestamps=True)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+class TestGenerateTimestamps:
+    TEXT = "hey seeree what is on tonight"
+
+    def test_returns_audio_and_timestamps(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        audio, timestamps = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)
+        assert isinstance(audio, np.ndarray)
+        assert timestamps is not None
+
+    def test_one_entry_per_word_in_order(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        _, timestamps = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)
+        assert [entry["word"] for entry in timestamps] == self.TEXT.split()
+
+    def test_times_are_non_decreasing(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        _, timestamps = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)
+        times = [t for entry in timestamps for t in (entry["start_time"], entry["end_time"])]
+        assert times == sorted(times)
+
+    def test_last_word_ends_within_the_clip(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        audio, timestamps = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)
+        duration = len(audio) / SAMPLE_RATE
+        end = timestamps[-1]["end_time"]
+        # The clip ends with the EOS pad's silence, so the last word ends a
+        # little before it -- but never after.
+        assert end <= duration
+        assert duration - end < 0.5
+
+    def test_durations_account_for_the_whole_clip(self, model, config, voice_manager):
+        """The predicted durations the times come from must sum to the audio."""
+        from kokoro_mlx.phonemize import Phonemizer
+        from kokoro_mlx.timestamps import TS_SCALE
+
+        phonemizer = Phonemizer(config.vocab, language="en-us")
+        phonemes, token_ids = phonemizer.phonemize(self.TEXT)
+        voice_array = voice_manager.load_voice("af_bella")
+        style = voice_manager.get_style(voice_array, len(token_ids))
+
+        audio, pred_dur = model.forward(phonemes, style, 1.0, return_pred_dur=True)
+        samples = np.array(audio.tolist(), dtype=np.float32)
+        assert abs(float(pred_dur.sum()) * TS_SCALE - len(samples) / SAMPLE_RATE) < 1e-3
+
+    def test_words_spanning_several_phoneme_groups(self, model, config, voice_manager):
+        """Numbers and abbreviations phonemise to multiple groups; still one entry each."""
+        from kokoro_mlx.generate import generate
+
+        text = "call 555 1234 now"
+        _, timestamps = generate(text, model, config, voice_manager, return_timestamps=True)
+        assert timestamps is not None
+        assert [entry["word"] for entry in timestamps] == text.split()
+
+    def test_multi_chunk_text_offsets_each_chunk(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        # Long enough to exceed the 510-token window and split into chunks.
+        text = " ".join(f"The quick brown fox jumps over the lazy dog number {i}." for i in range(12))
+        audio, timestamps = generate(text, model, config, voice_manager, return_timestamps=True)
+        assert timestamps is not None
+        assert [entry["word"] for entry in timestamps] == text.split()
+        starts = [entry["start_time"] for entry in timestamps]
+        assert starts == sorted(starts)
+        assert timestamps[-1]["end_time"] <= len(audio) / SAMPLE_RATE
+
+    def test_speed_is_already_in_the_durations(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        audio, timestamps = generate(self.TEXT, model, config, voice_manager, speed=1.5, return_timestamps=True)
+        assert timestamps[-1]["end_time"] <= len(audio) / SAMPLE_RATE
+
+    def test_48k_times_stay_in_seconds(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        native = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)[1]
+        upsampled = generate(self.TEXT, model, config, voice_manager, sample_rate=48000, return_timestamps=True)[1]
+        assert native == upsampled
+
+    def test_empty_text_returns_no_timestamps(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        audio, timestamps = generate("", model, config, voice_manager, return_timestamps=True)
+        assert audio.shape[0] == 0
+        assert timestamps == []
+
+    def test_plain_call_still_returns_a_bare_array(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        assert isinstance(generate(self.TEXT, model, config, voice_manager), np.ndarray)
+
+    def test_audio_is_unchanged_by_the_request(self, model, config, voice_manager):
+        from kokoro_mlx.generate import generate
+
+        plain = generate(self.TEXT, model, config, voice_manager)
+        with_ts, _ = generate(self.TEXT, model, config, voice_manager, return_timestamps=True)
+        # The vocoder's excitation noise makes samples differ run to run, but
+        # the durations that set the length are deterministic.
+        assert plain.shape == with_ts.shape
+        assert plain.dtype == with_ts.dtype
 
 
 # ---------------------------------------------------------------------------

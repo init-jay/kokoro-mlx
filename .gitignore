@@ -53,3 +53,4 @@ htmlcov/
 *.wav
 *.mp3
 *.flac
+.claude/settings.json

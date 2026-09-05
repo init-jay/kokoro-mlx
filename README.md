@@ -42,6 +42,7 @@ Model weights download automatically from HuggingFace Hub on first use.
 - **Gapless streaming** over a single persistent audio stream.
 - **54 voices** across American English, British English, and additional languages.
 - **Language-aware G2P** inferred from the voice prefix, with explicit language override.
+- **Word timestamps** read from the model's own predicted phoneme durations, not estimated.
 - **WAV export** in one call.
 - **Thread-safe** with internal lock for concurrent callers.
 - **Context manager** for resource cleanup.
@@ -63,7 +64,7 @@ tts = KokoroTTS.from_pretrained("mlx-community/Kokoro-82M-bf16")
 tts = KokoroTTS.from_pretrained("/path/to/model")
 ```
 
-### `tts.generate(text, voice, speed, sample_rate, language) -> TTSResult`
+### `tts.generate(text, voice, speed, sample_rate, language, return_timestamps) -> TTSResult`
 
 Synthesize text and return a `TTSResult`.
 
@@ -74,6 +75,37 @@ Synthesize text and return a `TTSResult`.
 | `speed` | `float` | `1.0` | Speaking rate multiplier (>1 faster, <1 slower) |
 | `sample_rate` | `int` | `24000` | Output sample rate: 24000 (native) or 48000 (2x upsampled) |
 | `language` | `str` or `None` | `None` | Optional G2P language code/name. `None` infers from the voice prefix. |
+| `return_timestamps` | `bool` | `False` | Populate `TTSResult.timestamps` with per-word times |
+
+### Word Timestamps
+
+Kokoro's duration predictor emits a duration for every phoneme, and the audio is
+rendered from exactly those durations. Word boundaries are therefore exact by
+construction rather than estimated by forced alignment or energy detection.
+
+```python
+with KokoroTTS.from_pretrained() as tts:
+    result = tts.generate("hey there what is on tonight", return_timestamps=True)
+
+    for entry in result.timestamps:
+        print(entry)
+    # {'word': 'hey', 'start_time': 0.45, 'end_time': 0.6}
+    # {'word': 'there', 'start_time': 0.675, 'end_time': 1.05}
+    # ...
+
+    # Cut the clip after the second word.
+    end = result.timestamps[1]["end_time"]
+    clipped = result.audio[: int(end * result.sample_rate)]
+```
+
+There is one entry per whitespace-separated word of the input, in order, with
+times in seconds from the start of the clip rounded to milliseconds. Because the
+clip opens and closes with the model's own padding, the first word starts a
+little after 0 and the last ends a little before `result.duration`.
+
+`timestamps` is `None` when the phonemes could not be mapped onto the input
+words — a guess would be silently wrong audio, so nothing is returned instead.
+Callers that depend on the times should check for `None` and fall back.
 
 ### `tts.generate_stream(text, voice, speed, sample_rate, language) -> Iterator[np.ndarray]`
 
@@ -157,7 +189,11 @@ class TTSResult:
     sample_rate: int    # 24000 or 48000
     duration: float     # seconds
     voice: str          # voice name used
+    timestamps: list[dict] | None = None   # per-word times, when requested
 ```
+
+Each timestamp entry is a `{"word": str, "start_time": float, "end_time": float}`
+mapping. See [Word Timestamps](#word-timestamps).
 
 ---
 

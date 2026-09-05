@@ -153,12 +153,21 @@ class Phonemizer:
         Returns a list of ``(phoneme_string, token_ids)`` tuples, one per
         chunk.
         """
+        return [(phonemes, token_ids) for _, phonemes, token_ids in self.phonemize_chunks(text)]
+
+    def phonemize_chunks(self, text: str) -> list[tuple[str, str, list[int]]]:
+        """Like :meth:`phonemize_long`, but keeps each chunk's source text.
+
+        Returns a list of ``(chunk_text, phoneme_string, token_ids)`` tuples.
+        Word timestamps need the graphemes a chunk was built from, which
+        :meth:`phonemize_long` discards.
+        """
         if not text or not text.strip():
             return []
 
         # Split into sentences and accumulate until the limit is reached.
         sentences = _SENTENCE_BOUNDARY.split(text.strip())
-        chunks: list[tuple[str, list[int]]] = []
+        chunks: list[tuple[str, str, list[int]]] = []
         current_sentences: list[str] = []
 
         for sentence in sentences:
@@ -173,7 +182,7 @@ class Phonemizer:
                 # Flush the current accumulation before adding the new sentence.
                 flush_text = " ".join(current_sentences)
                 ph = self._phonemes_for_text(flush_text)
-                chunks.append((ph, self._ids_from_phonemes(ph)))
+                chunks.append((flush_text, ph, self._ids_from_phonemes(ph)))
                 current_sentences = [sentence]
             else:
                 current_sentences.append(sentence)
@@ -181,6 +190,6 @@ class Phonemizer:
         if current_sentences:
             flush_text = " ".join(current_sentences)
             ph = self._phonemes_for_text(flush_text)
-            chunks.append((ph, self._ids_from_phonemes(ph)))
+            chunks.append((flush_text, ph, self._ids_from_phonemes(ph)))
 
         return chunks
