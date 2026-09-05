@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-09-06
+
+### Fixed
+
+- Word `end_time` no longer lands systematically early. The silence between two words was attributed to neither of them, so every word ended at its last phoneme. `KPipeline.join_timestamps` upstream — the path Kokoro-FastAPI reports for English voices — splits that gap down the middle instead, and now so do we: a word ends halfway into the following silence and the next word starts there. Measured on `"hey seeree what is on tonight"` across the eight voices of the report, the median disagreement with Kokoro-FastAPI goes from **-34 ms to -9 ms** and loses its consistent sign. The leading pad and the trailing silence are still owned by no word.
+
 ## [0.2.1] - 2026-09-05
 
 ### Fixed

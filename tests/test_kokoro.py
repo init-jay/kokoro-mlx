@@ -67,6 +67,17 @@ class TestKokoroTTS:
             assert isinstance(entry["start_time"], float)
             assert entry["start_time"] <= entry["end_time"] <= result.duration
 
+    def test_consecutive_words_leave_no_unattributed_gap(self, tts):
+        """Each word runs to the midpoint of the silence that follows it.
+
+        Ending a word at its last phoneme instead leaves the gap owned by
+        nobody and puts every ``end_time`` half a gap early -- the -34 ms
+        median against Kokoro-FastAPI reported in v0.2.1.
+        """
+        result = tts.generate("hey seeree what is on tonight", voice="af_bella", return_timestamps=True)
+        for before, after in zip(result.timestamps, result.timestamps[1:]):
+            assert after["start_time"] == before["end_time"]
+
     def test_sample_rate_actually_resamples(self, tts):
         """A requested rate must change the samples, not just the label."""
         text = "hey seeree what is on tonight"

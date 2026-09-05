@@ -89,8 +89,8 @@ with KokoroTTS.from_pretrained() as tts:
 
     for entry in result.timestamps:
         print(entry)
-    # {'word': 'hey', 'start_time': 0.45, 'end_time': 0.6}
-    # {'word': 'there', 'start_time': 0.675, 'end_time': 1.05}
+    # {'word': 'hey', 'start_time': 0.375, 'end_time': 0.575}
+    # {'word': 'there', 'start_time': 0.575, 'end_time': 0.775}
     # ...
 
     # Cut the clip after the second word.
@@ -102,6 +102,13 @@ There is one entry per whitespace-separated word of the input, in order, with
 times in seconds from the start of the clip rounded to milliseconds. Because the
 clip opens and closes with the model's own padding, the first word starts a
 little after 0 and the last ends a little before `result.duration`.
+
+The silence between two words belongs to neither, so it is split down the middle
+— each word runs halfway into the gap that follows it and the next word starts
+from that same point, which is what `KPipeline.join_timestamps` upstream does and
+what Kokoro-FastAPI reports for English voices. Consecutive entries therefore
+meet exactly, and cutting at an `end_time` keeps the whole word plus half of the
+pause after it.
 
 `timestamps` is `None` when the phonemes could not be mapped onto the input
 words — a guess would be silently wrong audio, so nothing is returned instead.

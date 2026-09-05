@@ -7,6 +7,11 @@ Kokoro renders audio from exactly the durations its duration predictor emits,
 so summing those durations and splitting at the phoneme string's spaces gives
 word boundaries that are exact by construction rather than estimated.
 
+The arithmetic on top of those sums follows ``KPipeline.join_timestamps``
+upstream, which is what Kokoro-FastAPI reports for English voices: each word
+runs to the midpoint of the silence that follows it, not to its last phoneme.
+See :func:`_groups`.
+
 Every helper here returns ``None`` rather than a guess when the phoneme groups
 cannot be mapped onto the input words.  A caller that falls back to its own
 estimate is degraded but honest; silently wrong boundaries cut audio in the
@@ -38,23 +43,41 @@ def _groups(units: str, durations: Sequence[float]) -> list[tuple[float, float]]
 
     ``durations[0]`` is the BOS pad and ``durations[1 + i]`` covers
     ``units[i]``, so the running total is already the clip-relative time.
+
+    The gap between two runs is silence that belongs to neither phoneme, and
+    upstream's ``KPipeline.join_timestamps`` -- the path Kokoro-FastAPI uses for
+    English voices -- splits it down the middle: a word ends halfway into the
+    gap that follows it and the next word starts from that same midpoint.
+    Ending a word at its last phoneme instead hands the whole gap to nobody and
+    cuts every word short by half of it, which is 12-50 ms here, always in the
+    same direction, and lands squarely in a caller's tail budget.
+
+    The gap before the first run and the one after the last are not split:
+    those are the BOS pad and the trailing silence, which no word owns.
     """
-    groups: list[tuple[float, float]] = []
+    raw: list[tuple[float, float]] = []
     now = durations[0]
     start: float | None = None
 
     for i, ch in enumerate(units):
         if ch.isspace():
             if start is not None:
-                groups.append((start, now))
+                raw.append((start, now))
                 start = None
         elif start is None:
             start = now
         now += durations[1 + i]
 
     if start is not None:
-        groups.append((start, now))
-    return groups
+        raw.append((start, now))
+
+    return [
+        (
+            (raw[i - 1][1] + start) / 2.0 if i > 0 else start,
+            (end + raw[i + 1][0]) / 2.0 if i + 1 < len(raw) else end,
+        )
+        for i, (start, end) in enumerate(raw)
+    ]
 
 
 def _merge_groups(

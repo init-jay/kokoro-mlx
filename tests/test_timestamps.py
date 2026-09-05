@@ -41,10 +41,25 @@ class TestWordTimestamps:
         # units "ab cd": a=2, b=2, space=1, c=3, d=3 (BOS=0).
         result = word_timestamps("ab cd", "ab cd", _durations(2, 2, 1, 3, 3), _VOCAB, _identity_phonemes)
         assert result[0]["start_time"] == 0.0
-        assert result[0]["end_time"] == round(4 * TS_SCALE, 3)
-        # The space belongs to neither word: "cd" starts after it.
-        assert result[1]["start_time"] == round(5 * TS_SCALE, 3)
+        # The space is split down the middle, as KPipeline.join_timestamps does:
+        # "ab" runs half a space past its last phoneme and "cd" starts there.
+        assert result[0]["end_time"] == round(4.5 * TS_SCALE, 3)
+        assert result[1]["start_time"] == round(4.5 * TS_SCALE, 3)
         assert result[1]["end_time"] == round(11 * TS_SCALE, 3)
+
+    def test_words_meet_at_the_midpoint_of_every_gap(self):
+        # A long space between two words: neither owns it, both reach halfway.
+        result = word_timestamps("ab cd", "ab cd", _durations(1, 1, 8, 1, 1), _VOCAB, _identity_phonemes)
+        assert result[0]["end_time"] == round(6 * TS_SCALE, 3)
+        assert result[1]["start_time"] == round(6 * TS_SCALE, 3)
+
+    def test_leading_and_trailing_silence_belong_to_no_word(self):
+        # The BOS pad and the tail past the last phoneme are not split: the
+        # first word starts after the whole pad and the last ends at its own
+        # final phoneme.
+        result = word_timestamps("ab cd", "ab cd", _durations(1, 1, 2, 1, 1), _VOCAB, _identity_phonemes)
+        assert result[0]["start_time"] == 0.0
+        assert result[1]["end_time"] == round(6 * TS_SCALE, 3)
 
     def test_bos_duration_shifts_the_first_word(self):
         durations = [4, 1, 1, 0]
@@ -69,7 +84,7 @@ class TestWordTimestamps:
     def test_characters_outside_the_vocab_do_not_shift_times(self):
         # '?' never reached the model, so it owns no duration.
         result = word_timestamps("ab cd", "ab? cd", _durations(1, 1, 1, 1, 1), _VOCAB, _identity_phonemes)
-        assert result[1]["start_time"] == round(3 * TS_SCALE, 3)
+        assert result[1]["start_time"] == round(2.5 * TS_SCALE, 3)
 
     def test_empty_text_returns_empty_list(self):
         assert word_timestamps("", "", [0, 0], _VOCAB, _identity_phonemes) == []
@@ -89,10 +104,11 @@ class TestGroupReconciliation:
 
         result = word_timestamps("ten cd", "aa bb cd", _durations(1, 1, 1, 1, 1, 1, 1, 1), _VOCAB, phonemize)
         assert [entry["word"] for entry in result] == ["ten", "cd"]
-        # The merged span runs from the first group's start to the last's end.
+        # The merged span runs from the first group's start to the last's end,
+        # so the gap inside "ten" is absorbed and only the gap before "cd" splits.
         assert result[0]["start_time"] == 0.0
-        assert result[0]["end_time"] == round(5 * TS_SCALE, 3)
-        assert result[1]["start_time"] == round(6 * TS_SCALE, 3)
+        assert result[0]["end_time"] == round(5.5 * TS_SCALE, 3)
+        assert result[1]["start_time"] == round(5.5 * TS_SCALE, 3)
 
     def test_returns_none_when_counts_still_disagree(self):
         # Re-phonemising says one group per word, but there are three groups.
